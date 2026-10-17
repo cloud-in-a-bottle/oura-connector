@@ -14,6 +14,7 @@ from litestar.exceptions import NotFoundException
 from . import db
 from . import dedupe
 from . import oura
+from .service_access import PermissionRequired, guard_service_calls, permission_required_handler
 from .service_api import service_routes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -292,5 +293,7 @@ app = Litestar(
         trigger_backfill, backfill_status,
         *service_routes,
     ],
+    guards=[guard_service_calls],
+    exception_handlers={PermissionRequired: permission_required_handler},
     on_startup=[on_startup],
 )

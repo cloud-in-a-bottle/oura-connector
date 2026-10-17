@@ -38,6 +38,7 @@ from litestar import Request, get
 from litestar.response import Response
 
 from . import db, dedupe
+from .service_access import SERVICE_ENDPOINT
 
 SOURCE = "oura"
 
@@ -159,7 +160,7 @@ def _make_scalar(m_name: str, m_val: float):
 # /v1/metrics
 # ---------------------------------------------------------------------------
 
-@get("/api/v1/metrics")
+@get("/api/v1/metrics", opt=SERVICE_ENDPOINT)
 async def service_list_metrics() -> dict:
     metrics: list[MetricType] = []
     async with db.connect() as conn:
@@ -193,7 +194,7 @@ async def service_list_metrics() -> dict:
 # /v1/time-series
 # ---------------------------------------------------------------------------
 
-@get("/api/v1/time-series")
+@get("/api/v1/time-series", opt=SERVICE_ENDPOINT)
 async def service_time_series(request: Request) -> dict:
     metric = request.query_params.get("metric")
     start = request.query_params.get("start")
@@ -282,7 +283,7 @@ async def _daily_time_series(metric, display, unit, start, end, limit) -> TimeSe
 # /v1/sleep-sessions
 # ---------------------------------------------------------------------------
 
-@get("/api/v1/sleep-sessions")
+@get("/api/v1/sleep-sessions", opt=SERVICE_ENDPOINT)
 async def service_sleep_sessions(request: Request) -> dict:
     start = request.query_params.get("start")
     end = request.query_params.get("end")
@@ -472,7 +473,7 @@ async def _workout_hr_stats(conn, start_ms: int, end_ms: int):
     )).fetchone()
 
 
-@get("/api/v1/workouts")
+@get("/api/v1/workouts", opt=SERVICE_ENDPOINT)
 async def service_workouts(request: Request) -> dict:
     workout_type = request.query_params.get("workout_type")
     start = request.query_params.get("start")
@@ -508,7 +509,7 @@ async def service_workouts(request: Request) -> dict:
     return {"count": len(workouts), "data": workouts}
 
 
-@get("/api/v1/workouts/{workout_id:str}")
+@get("/api/v1/workouts/{workout_id:str}", opt=SERVICE_ENDPOINT)
 async def service_workout(workout_id: str) -> Response:
     """One workout's full detail: the summary plus its heart-rate trace."""
     hide_suppressed = " AND suppressed_by IS NULL" if await dedupe.is_enabled() else ""
