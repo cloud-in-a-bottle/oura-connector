@@ -36,6 +36,12 @@
   .contrib-item { margin-bottom: 0.5rem; }
   .contrib-head { display: flex; justify-content: space-between; font-size: 0.75rem; color: #94a3b8; }
   canvas { width: 100% !important; }
+  .table-wrap { overflow-x: auto; }
+  table.workouts { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.workouts th { text-align: left; font-size: 0.7rem; color: #64748b; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; padding: 0 0.75rem 0.5rem 0; white-space: nowrap; }
+  table.workouts td { padding: 0.5rem 0.75rem 0.5rem 0; border-top: 1px solid #334155; white-space: nowrap; }
+  table.workouts td.num, table.workouts th.num { text-align: right; }
 </style>
 </head>
 <body>
@@ -166,16 +172,40 @@ function contribBar(label,val,color){
 function sv(obj){return obj?obj.value:null;}
 function durMin(obj){return obj?obj.value:0;} // Duration scalars are in minutes
 
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function workoutLabel(t){const s=(t||'other').replace(/_/g,' ');return s.charAt(0).toUpperCase()+s.slice(1);}
+
+// Newest-first workout summaries from /api/v1/workouts as a table.
+function workoutsTable(ws){
+  if(!ws.length)return '<div class="no-data">No workouts yet. Workouts appear after a sync (Backfill pulls older ones).</div>';
+  const tz='America/Los_Angeles';
+  const rows=ws.map(w=>{
+    const start=new Date(w.start);
+    const when=start.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:tz})
+      +' '+start.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:tz});
+    const dist=sv(w.distance), cal=sv(w.calories), avg=sv(w.average_heart_rate), max=sv(w.max_heart_rate);
+    return `<tr><td>${when}</td><td>${esc(workoutLabel(w.workout_type))}</td>`
+      +`<td class="num">${toHM(durMin(w.duration)*60)}</td>`
+      +`<td class="num">${dist!=null?(dist/1000).toFixed(2)+' km':'--'}</td>`
+      +`<td class="num">${cal!=null?Math.round(cal):'--'}</td>`
+      +`<td class="num">${avg!=null?Math.round(avg)+' / '+Math.round(max):'--'}</td></tr>`;
+  }).join('');
+  return '<div class="card table-wrap"><table class="workouts"><thead><tr><th>When</th><th>Activity</th>'
+    +'<th class="num">Duration</th><th class="num">Distance</th><th class="num">Calories</th><th class="num">Avg / Max HR</th>'
+    +`</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 async function loadDashboard(){
   const today=getToday();
   // History needs only scalar fields, so skip the per-night sample series here;
   // the last-night charts fetch their series separately below.
-  const [sessions,readinessTsResp,sleepScoreTsResp,tempDevResp,tempTrendResp]=await Promise.all([
+  const [sessions,readinessTsResp,sleepScoreTsResp,tempDevResp,tempTrendResp,workoutsResp]=await Promise.all([
     fetchJSON('/api/v1/sleep-sessions?limit=60&include_series=false'),
     fetchJSON('/api/v1/time-series?metric=readiness_score'),
     fetchJSON('/api/v1/time-series?metric=sleep_score'),
     fetchJSON(`/api/v1/time-series?metric=temperature_deviation&start=${today}&end=${today}`),
     fetchJSON(`/api/v1/time-series?metric=temperature_trend_deviation&start=${today}&end=${today}`),
+    fetchJSON('/api/v1/workouts?limit=20'),
   ]);
 
   // Also fetch readiness contributors for today
@@ -314,6 +344,12 @@ async function loadDashboard(){
   } else {
     html+=`<div class="section-title">Today <span class="date">${fmtDate(today)}</span></div><div class="no-data">No data for today yet. Data usually appears after your first sync of the day.</div>`;
   }
+  html+='</section>';
+
+  // ---- RECENT WORKOUTS ----
+  html+='<section id="workouts">';
+  html+='<div class="section-title">Recent Workouts</div>';
+  html+=workoutsTable((workoutsResp.data||[]).slice().reverse());
   html+='</section>';
 
   // ---- HISTORY ----
