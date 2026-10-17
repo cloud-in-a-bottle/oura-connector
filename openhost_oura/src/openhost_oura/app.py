@@ -12,6 +12,7 @@ from litestar.response import Redirect, Response
 from litestar.exceptions import NotFoundException
 
 from . import db
+from . import dedupe
 from . import oura
 from .service_api import service_routes
 
@@ -54,6 +55,8 @@ async def setup_page() -> Response:
     token = await db.get_config("oura_access_token")
     last_sync = await db.get_config("last_sync") or "never"
     last_error = await db.get_config("last_sync_error")
+    dedupe_on = await dedupe.is_enabled()
+    dedupe_error = await db.get_config("dedupe_error") if dedupe_on else None
     status = "connected" if token else "not connected"
     error_banner = ""
     if last_error:
@@ -62,8 +65,19 @@ async def setup_page() -> Response:
             'border:1px solid #b91c1c;border-radius:8px;padding:0.6rem 0.8rem">'
             f"{html_escape(last_error)}</p>"
         )
+    dedupe_status = ""
+    if dedupe_error:
+        dedupe_status = f'<p class="hint" style="color:#fca5a5">{html_escape(dedupe_error)}</p>'
+    elif dedupe_on:
+        async with db.connect() as conn:
+            n = (await (await conn.execute(
+                "SELECT COUNT(*) FROM workouts WHERE suppressed_by IS NOT NULL"
+            )).fetchone())[0]
+        dedupe_status = f'<p class="hint">{n} workout(s) currently hidden as duplicates.</p>'
     html = (
         SETUP_HTML.replace("{{client_id}}", client_id)
+        .replace("{{dedupe_checked}}", "checked" if dedupe_on else "")
+        .replace("{{dedupe_status}}", dedupe_status)
         .replace("{{status}}", status)
         .replace("{{last_sync}}", last_sync)
         .replace("{{error_banner}}", error_banner)
@@ -114,9 +128,21 @@ async def oauth_callback(request: Request) -> Response:
         await db.set_config("oura_refresh_token", tokens["refresh_token"])
 
     await db.delete_config("oauth_state")
+    await db.delete_config("workouts_unauthorized")
 
     asyncio.create_task(_background_sync())
     return Redirect("/")
+
+
+@post("/setup/dedupe")
+async def set_dedupe(request: Request) -> Response:
+    body = (await request.body()).decode()
+    enabled = any(p.split("=", 1)[0] == "dedupe_workouts" for p in body.split("&"))
+    await db.set_config("dedupe_workouts", "1" if enabled else "")
+    if enabled:
+        # Catch up on the whole history now rather than only the sync lookback.
+        asyncio.create_task(dedupe.refresh_all())
+    return Redirect("/setup")
 
 
 @get("/api/status")
@@ -181,6 +207,7 @@ async def reset_data() -> dict:
         await conn.execute("DELETE FROM sleep_session_metrics")
         await conn.execute("DELETE FROM sleep_sessions")
         await conn.execute("DELETE FROM daily_metrics")
+        await conn.execute("DELETE FROM workouts")
         await conn.commit()
     return {"status": "cleared"}
 
@@ -261,7 +288,7 @@ DASHBOARD_HTML = (_TEMPLATES / "dashboard.html").read_text()
 app = Litestar(
     route_handlers=[
         health_check, index, setup_page, start_oauth,
-        oauth_callback, get_status, trigger_sync, reset_data,
+        oauth_callback, set_dedupe, get_status, trigger_sync, reset_data,
         trigger_backfill, backfill_status,
         *service_routes,
     ],

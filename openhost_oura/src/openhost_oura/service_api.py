@@ -11,27 +11,33 @@ from datetime import datetime, timezone
 import attrs
 from health_data_service import (
     BreathRateAvg,
+    Calories,
     Count,
+    Distance,
     Duration,
     Efficiency,
     HeartRate,
     HeartRateAvg,
+    HeartRateMax,
     HeartRateMin,
     HRV_RMSSD,
     HRVAvg,
     IntervalSample,
     MetricKind,
     MetricType,
+    Pace,
     Sample,
     Score,
     SleepSession,
     SleepStage,
     SleepStages,
+    Speed,
     TimeSeries,
 )
 from litestar import Request, get
+from litestar.response import Response
 
-from . import db
+from . import db, dedupe
 
 SOURCE = "oura"
 
@@ -410,9 +416,117 @@ async def service_sleep_sessions(request: Request) -> dict:
 # /v1/workouts
 # ---------------------------------------------------------------------------
 
+# Types whose workouts carry distance/speed (spec: DistanceWorkout / SwimmingWorkout).
+DISTANCE_TYPES = {"running", "walking", "hiking", "cycling", "snowboarding", "downhill_skiing", "swimming"}
+# Foot-based types that also report pace.
+PACE_TYPES = {"running", "walking", "hiking"}
+
+_WORKOUT_COLUMNS = "source_id, workout_type, start_unix, end_unix, calories, distance"
+
+# Instantaneous HR from the heartrate collection; excludes the 5-minute
+# averages stored per sleep session so nothing is double-counted.
+_WORKOUT_HR_WHERE = (
+    "metric = 'heart_rate' AND sleep_session_id IS NULL"
+    " AND timestamp_unix >= ? AND timestamp_unix <= ?"
+)
+
+
+def _build_workout(r, hr_stats, hr_samples=None) -> dict:
+    """Spec workout dict from a workouts row and its (avg, max, min) HR over
+    the workout window. hr_samples adds the full trace (detail endpoint only)."""
+    source_id, wtype, start_ms, end_ms, calories, distance = r
+    duration_s = (end_ms - start_ms) / 1000.0
+    w: dict = {
+        "start": _dt(start_ms).isoformat(),
+        "end": _dt(end_ms).isoformat(),
+        "id": source_id,
+        "workout_type": wtype,
+        "source": SOURCE,
+        "duration": Duration(value=duration_s / 60.0, source=SOURCE),
+    }
+    if calories is not None:
+        w["calories"] = Calories(value=calories, source=SOURCE)
+
+    avg_hr, max_hr, min_hr = hr_stats or (None, None, None)
+    if avg_hr is not None:
+        w["average_heart_rate"] = HeartRateAvg(value=avg_hr, source=SOURCE)
+        w["max_heart_rate"] = HeartRateMax(value=max_hr, source=SOURCE)
+        w["lowest_heart_rate"] = HeartRateMin(value=min_hr, source=SOURCE)
+    if hr_samples:
+        w["heart_rate"] = HeartRate(source=SOURCE, samples=hr_samples)
+
+    if wtype in DISTANCE_TYPES and distance:
+        w["distance"] = Distance(value=distance, source=SOURCE)
+        if duration_s > 0:
+            w["average_speed"] = Speed(value=distance / duration_s, display_name="Avg Speed", source=SOURCE)
+            if wtype in PACE_TYPES:
+                w["average_pace"] = Pace(value=duration_s / (distance / 1000.0), display_name="Avg Pace", source=SOURCE)
+
+    return _serialize(w)
+
+
+async def _workout_hr_stats(conn, start_ms: int, end_ms: int):
+    return await (await conn.execute(
+        f"SELECT AVG(value), MAX(value), MIN(value) FROM samples WHERE {_WORKOUT_HR_WHERE}",
+        (start_ms, end_ms),
+    )).fetchone()
+
+
 @get("/api/v1/workouts")
 async def service_workouts(request: Request) -> dict:
-    return {"data": []}
+    workout_type = request.query_params.get("workout_type")
+    start = request.query_params.get("start")
+    end = request.query_params.get("end")
+    limit = int(request.query_params.get("limit", "100"))
+
+    conditions = []
+    params: list = []
+    if await dedupe.is_enabled():
+        conditions.append("suppressed_by IS NULL")
+    if workout_type:
+        conditions.append("workout_type = ?")
+        params.append(workout_type)
+    if start:
+        conditions.append("start_unix >= ?")
+        params.append(_to_ms(start))
+    if end:
+        conditions.append("start_unix <= ?")
+        params.append(_to_ms(end))
+    params.append(limit)
+
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    async with db.connect() as conn:
+        rows = await (await conn.execute(
+            f"SELECT {_WORKOUT_COLUMNS} FROM workouts{where} ORDER BY start_unix DESC LIMIT ?",
+            params,
+        )).fetchall()
+        # Summary only: the per-sample HR trace is served by the detail endpoint.
+        workouts = [
+            _build_workout(tuple(r), await _workout_hr_stats(conn, r[2], r[3]))
+            for r in reversed(rows)
+        ]
+    return {"count": len(workouts), "data": workouts}
+
+
+@get("/api/v1/workouts/{workout_id:str}")
+async def service_workout(workout_id: str) -> Response:
+    """One workout's full detail: the summary plus its heart-rate trace."""
+    hide_suppressed = " AND suppressed_by IS NULL" if await dedupe.is_enabled() else ""
+    async with db.connect() as conn:
+        r = await (await conn.execute(
+            f"SELECT {_WORKOUT_COLUMNS} FROM workouts WHERE source_id = ?{hide_suppressed}",
+            (workout_id,),
+        )).fetchone()
+        if not r:
+            return Response(content={"error": "not found"}, status_code=404)
+        hr_rows = await (await conn.execute(
+            f"SELECT timestamp_unix, value FROM samples WHERE {_WORKOUT_HR_WHERE} ORDER BY timestamp_unix",
+            (r[2], r[3]),
+        )).fetchall()
+        hr_stats = await _workout_hr_stats(conn, r[2], r[3])
+
+    hr_samples = [Sample(timestamp=_dt(t), value=v) for t, v in hr_rows]
+    return Response(content=_build_workout(tuple(r), hr_stats, hr_samples))
 
 
 # ---------------------------------------------------------------------------
@@ -424,4 +538,5 @@ service_routes = [
     service_time_series,
     service_sleep_sessions,
     service_workouts,
+    service_workout,
 ]

@@ -2,7 +2,7 @@
 
 A self-hosted connector for your [Oura ring](https://ouraring.com/) health data
 on Cloud in a Bottle. It syncs the metrics your ring collects — sleep, activity,
-and readiness — from the Oura Cloud API into a private SQLite database on your
+readiness, and workouts — from the Oura Cloud API into a private SQLite database on your
 own zone, shows them in a dashboard, and re-exposes them to your other apps
 through the shared
 [health-data service](https://github.com/imbue-openhost/health-data-service-spec)
@@ -24,8 +24,13 @@ credentials:
    - Copy the **Client ID** and **Client Secret**.
 2. Open this app and go to **Setup**. Paste the Client ID and Secret and click
    connect — you'll be sent to Oura to authorize, then redirected back.
-3. Run an initial **Backfill** to pull your history, then **Sync** keeps it up to
-   date.
+3. Run an initial **Backfill** to pull your history (workouts included), then
+   **Sync** keeps it up to date.
+
+If you connected before workout support was added, your token lacks Oura's
+`workout` permission: other data keeps syncing, the app shows a reconnect
+notice, and reconnecting in **Setup** then running **Backfill** pulls your full
+workout history.
 
 Your Oura credentials and tokens are stored only in this app's private database
 on your zone.
@@ -37,6 +42,12 @@ on your zone.
 - **Provides the `health-data` service** (`/api/`) — other apps on your zone can
   read your metrics, time series, sleep sessions, and workouts through the
   Cloud in a Bottle service mesh (you grant access per app).
+- **Workout dedupe** (opt-in, in **Setup**) — if another app also provides the
+  `health-data` service (e.g. Apple Health), Oura workouts that overlap one of
+  its workouts in time are hidden from the `health-data` API so consumers don't
+  see the same session twice. They stay in this app's database, and turning the
+  option off returns them. Checked on every sync (last 30 days) and across your
+  full history after a backfill or when the option is switched on.
 
 ## Access
 

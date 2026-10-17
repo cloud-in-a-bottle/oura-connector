@@ -1,10 +1,11 @@
 import asyncio
 import httpx
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
-from . import db
+from . import db, dedupe
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ def _to_utc(ts: str) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 OURA_AUTH_URL = "https://cloud.ouraring.com/oauth/authorize"
 OURA_TOKEN_URL = "https://api.ouraring.com/oauth/token"
-OURA_SCOPES = "daily heartrate personal session"
+OURA_SCOPES = "daily heartrate personal session workout"
 
 
 def get_authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
@@ -154,8 +155,9 @@ async def sync_all(days: int | None = None):
     async with httpx.AsyncClient(timeout=60) as client:
         await _sync_window(client, headers, start_date, end_date)
 
+    await dedupe.refresh_recent()
     await db.set_config("last_sync", datetime.now(timezone.utc).isoformat())
-    await db.set_config("last_sync_error", "")
+    await db.set_config("last_sync_error", await _workouts_scope_warning())
     log.info("Sync complete for %s to %s", start_date, end_date)
 
 
@@ -172,11 +174,12 @@ def error_message(exc: Exception) -> str:
 
 
 async def _sync_window(client, headers, start_date: str, end_date: str):
-    """Sync all four collections for a [start_date, end_date] window (YYYY-MM-DD)."""
+    """Sync every collection for a [start_date, end_date] window (YYYY-MM-DD)."""
     await _sync_sleep(client, headers, start_date, end_date)
     await _sync_heartrate_range(client, headers, start_date, end_date)
     await _sync_daily_readiness(client, headers, start_date, end_date)
     await _sync_daily_sleep(client, headers, start_date, end_date)
+    await _sync_workouts(client, headers, start_date, end_date)
 
 
 # The heartrate endpoint rejects ranges longer than 30 days; daily endpoints don't.
@@ -217,6 +220,11 @@ async def backfill():
     start_str = await db.get_config("backfill_start") or BACKFILL_DEFAULT_START
     await db.set_config("backfill_start", start_str)
 
+    # A finished backfill's cursor sits past today; a new request re-walks the
+    # whole history (picking up collections added since, e.g. workouts).
+    if await db.get_config("backfill_state") == "done":
+        await db.delete_config("backfill_cursor")
+
     cursor_str = await db.get_config("backfill_cursor") or start_str
     cursor = datetime.fromisoformat(cursor_str).replace(day=1, tzinfo=timezone.utc)
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -238,8 +246,10 @@ async def backfill():
         log.exception("Backfill failed")
         raise
 
+    await dedupe.refresh_all()
     await db.set_config("backfill_state", "done")
     await db.set_config("last_sync", datetime.now(timezone.utc).isoformat())
+    await db.set_config("last_sync_error", await _workouts_scope_warning())
     log.info("Backfill complete from %s", start_str)
 
 
@@ -512,4 +522,112 @@ async def _sync_daily_sleep(client, headers, start_date, end_date):
                        VALUES (?, ?, ?, ?)""",
                     metrics,
                 )
+        await conn.commit()
+
+
+# Oura activity names (e.g. "cycling", "strengthTraining") mapped by keyword to
+# the spec's canonical workout types, so each deserializes into the right
+# Workout subclass. Mirrors the Apple Health connector's mapping.
+WORKOUT_TYPE_PATTERNS = {
+    "running": ("run",),
+    "cycling": ("cycl", "bike", "biking"),
+    "swimming": ("swim",),
+    "walking": ("walk",),
+    "hiking": ("hik",),
+    "snowboarding": ("snowboard",),
+    "downhill_skiing": ("ski",),
+    "strength": ("strength", "weight"),
+    "yoga": ("yoga",),
+}
+
+
+def _slug(name: str) -> str:
+    """camelCase / spaced / dashed names to snake_case."""
+    s = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", (name or "").strip())
+    return re.sub(r"[\s\-]+", "_", s).lower()
+
+
+def workout_type(activity: str) -> str:
+    """Canonical spec type by keyword, else the activity's own slug (e.g.
+    "elliptical"), so every activity stays labelled rather than "other"."""
+    slug = _slug(activity)
+    for wtype, keys in WORKOUT_TYPE_PATTERNS.items():
+        if any(k in slug for k in keys):
+            return wtype
+    return slug or "other"
+
+
+WORKOUTS_SCOPE_WARNING = (
+    "Workouts need an extra Oura permission. Open Settings and reconnect your "
+    "Oura account to sync them."
+)
+
+
+async def _workouts_scope_warning() -> str:
+    return WORKOUTS_SCOPE_WARNING if await db.get_config("workouts_unauthorized") == "1" else ""
+
+
+async def _sync_workouts(client, headers, start_date, end_date):
+    # Already known to be denied: don't burn a token refresh on every window.
+    # Reconnecting clears the flag (see the OAuth callback).
+    if await db.get_config("workouts_unauthorized") == "1":
+        return
+    try:
+        records = await _fetch_paginated(
+            client,
+            f"{OURA_API}/usercollection/workout",
+            headers,
+            {"start_date": start_date, "end_date": end_date},
+        )
+    except httpx.HTTPStatusError as e:
+        # Tokens granted before the workout scope was requested can't read
+        # workouts; skip them rather than failing the whole sync.
+        if e.response.status_code in (401, 403):
+            log.warning("Oura denied workout access (HTTP %d); reconnect to grant the workout scope",
+                        e.response.status_code)
+            await db.set_config("workouts_unauthorized", "1")
+            return
+        raise
+    await db.set_config("workouts_unauthorized", "")
+    log.info("Fetched %d workout records", len(records))
+
+    rows = []
+    for rec in records:
+        source_id = rec.get("id")
+        start = rec.get("start_datetime")
+        end = rec.get("end_datetime")
+        if not source_id or not start or not end:
+            continue
+        activity = rec.get("activity") or "other"
+        calories = rec.get("calories")
+        distance = rec.get("distance")
+        rows.append((
+            source_id,
+            activity,
+            workout_type(activity),
+            rec.get("label"),
+            int(datetime.fromisoformat(start).timestamp() * 1000),
+            int(datetime.fromisoformat(end).timestamp() * 1000),
+            rec.get("day"),
+            float(calories) if calories is not None else None,
+            float(distance) if distance is not None else None,
+            rec.get("intensity"),
+            rec.get("source"),
+        ))
+
+    if not rows:
+        return
+    async with db.connect() as conn:
+        await conn.executemany(
+            """INSERT INTO workouts (source, source_id, activity, workout_type, label,
+                   start_unix, end_unix, day, calories, distance, intensity, workout_source)
+               VALUES ('oura', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source, source_id) DO UPDATE SET
+                 activity = excluded.activity, workout_type = excluded.workout_type,
+                 label = excluded.label, start_unix = excluded.start_unix,
+                 end_unix = excluded.end_unix, day = excluded.day,
+                 calories = excluded.calories, distance = excluded.distance,
+                 intensity = excluded.intensity, workout_source = excluded.workout_source""",
+            rows,
+        )
         await conn.commit()
