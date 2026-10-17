@@ -26,7 +26,7 @@ sqlite = ["health"]
 service = "https://github.com/imbue-openhost/health-data-service-spec"
 shortname = "health"
 version = ">=0.1.0"
-grants = ["full_access"]
+grants = ["read"]
 
 [[services.v2.provides]]
 service = "https://github.com/imbue-openhost/health-data-service-spec"
