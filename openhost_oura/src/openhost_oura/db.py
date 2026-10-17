@@ -48,12 +48,32 @@ CREATE TABLE IF NOT EXISTS daily_metrics (
     UNIQUE(source, date, metric)
 );
 
+CREATE TABLE IF NOT EXISTS workouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL DEFAULT 'oura',
+    source_id TEXT NOT NULL,          -- Oura's workout id; exposed as the spec id
+    activity TEXT NOT NULL,           -- raw Oura activity, e.g. "cycling"
+    workout_type TEXT NOT NULL,       -- spec workout_type derived from activity
+    label TEXT,                       -- user-entered label, if any
+    start_unix INTEGER NOT NULL,      -- unix epoch milliseconds
+    end_unix INTEGER NOT NULL,        -- unix epoch milliseconds
+    day TEXT,
+    calories REAL,                    -- kcal
+    distance REAL,                    -- meters
+    intensity TEXT,                   -- Oura's easy/moderate/hard
+    workout_source TEXT,              -- Oura's manual/autodetected/confirmed/workout_heart_rate
+    suppressed_by TEXT,               -- "<app>:<id>" of an overlapping workout from another provider
+    UNIQUE(source, source_id)
+);
+
 -- Composite index so per-session lookups (filter by session + metric, ordered
 -- by time) hit one session's rows directly instead of scanning a whole metric.
 CREATE INDEX IF NOT EXISTS idx_samples_session_metric ON samples(sleep_session_id, metric, timestamp_unix);
 DROP INDEX IF EXISTS idx_samples_session;
 CREATE INDEX IF NOT EXISTS idx_daily_metric_date ON daily_metrics(metric, date);
 CREATE INDEX IF NOT EXISTS idx_sleep_sessions_dates ON sleep_sessions(start_ts, end_ts);
+CREATE INDEX IF NOT EXISTS idx_workouts_start ON workouts(start_unix);
+CREATE INDEX IF NOT EXISTS idx_workouts_type_start ON workouts(workout_type, start_unix);
 """
 
 

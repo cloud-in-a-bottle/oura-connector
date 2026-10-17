@@ -20,6 +20,14 @@ cpu_cores = 0.2
 [data]
 sqlite = ["health"]
 
+# Read other providers' workouts so overlapping Oura ones can be hidden as
+# duplicates (opt-in, see Setup).
+[[services.v2.consumes]]
+service = "https://github.com/imbue-openhost/health-data-service-spec"
+shortname = "health"
+version = ">=0.1.0"
+grants = ["full_access"]
+
 [[services.v2.provides]]
 service = "https://github.com/imbue-openhost/health-data-service-spec"
 version = "0.1.0"

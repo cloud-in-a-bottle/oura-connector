@@ -28,6 +28,9 @@
   button:hover { background: #4f46e5; }
   .alt-btn { background: #334155; }
   .alt-btn:hover { background: #475569; }
+  .check { display: flex; gap: 0.5rem; align-items: flex-start; color: #e2e8f0; }
+  .check input { margin-top: 0.2rem; }
+  .hint { font-size: 0.8rem; color: #94a3b8; margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -43,6 +46,19 @@
     <label>Client Secret</label>
     <input type="password" name="client_secret" placeholder="Your client secret">
     <button type="submit">Connect to Oura</button>
+  </form>
+
+  <hr class="divider">
+
+  <h2>Workouts</h2>
+  <form method="POST" action="/setup/dedupe">
+    <label class="check">
+      <input type="checkbox" name="dedupe_workouts" value="1" {{dedupe_checked}}>
+      Hide workouts that another health-data provider also recorded
+    </label>
+    <p class="hint">Oura workouts that overlap in time with one from another app (e.g. Apple Health) aren't returned to other apps. They're kept here, and unchecking this shows them again.</p>
+    {{dedupe_status}}
+    <button type="submit" class="alt-btn">Save</button>
   </form>
 </div>
 </body>
