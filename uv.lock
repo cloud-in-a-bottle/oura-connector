@@ -1193,8 +1193,8 @@ wheels = [
 
 [[package]]
 name = "openhost"
-version = "0.2.0"
-source = { git = "https://github.com/imbue-openhost/openhost?rev=main#df48f33a96c690b428a8c8a327d7c37d41830096" }
+version = "0.3.0rc1"
+source = { git = "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle?rev=main#445237109b17a42a5d11e61b2b8b5554cb6ab9a1" }
 dependencies = [
     { name = "acme" },
     { name = "argon2-cffi" },
@@ -1264,7 +1264,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "openhost", extras = ["test-harness"], git = "https://github.com/imbue-openhost/openhost?rev=main" },
+    { name = "openhost", extras = ["test-harness"], git = "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle?rev=main" },
     { name = "pytest", specifier = ">=8.0" },
 ]
 
