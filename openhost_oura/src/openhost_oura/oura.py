@@ -9,19 +9,29 @@ from . import db, dedupe
 
 log = logging.getLogger(__name__)
 
-OURA_API = "https://api.ouraring.com/v2"
+# Oura's two hosts: the owner's browser visits the auth host to authorize; this app calls the API
+# host for tokens and data. The config keys override them. They have no UI: the OAuth harness test
+# writes them to point the app at a mock Oura.
+OURA_AUTH_BASE = "https://cloud.ouraring.com"
+OURA_API_BASE = "https://api.ouraring.com"
+
+
+async def _auth_base() -> str:
+    return await db.get_config("oura_auth_base_override") or OURA_AUTH_BASE
+
+
+async def _api_base() -> str:
+    return await db.get_config("oura_api_base_override") or OURA_API_BASE
 
 
 def _to_utc(ts: str) -> str:
     """Normalize any ISO 8601 timestamp to UTC with +00:00 suffix."""
     dt = datetime.fromisoformat(ts)
     return dt.astimezone(timezone.utc).isoformat()
-OURA_AUTH_URL = "https://cloud.ouraring.com/oauth/authorize"
-OURA_TOKEN_URL = "https://api.ouraring.com/oauth/token"
 OURA_SCOPES = "daily heartrate personal session workout"
 
 
-def get_authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
+async def get_authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
     params = {
         "response_type": "code",
         "client_id": client_id,
@@ -29,7 +39,7 @@ def get_authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
         "scope": OURA_SCOPES,
         "state": state,
     }
-    return f"{OURA_AUTH_URL}?{urlencode(params)}"
+    return f"{await _auth_base()}/oauth/authorize?{urlencode(params)}"
 
 
 async def exchange_code(
@@ -37,7 +47,7 @@ async def exchange_code(
 ) -> dict:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            OURA_TOKEN_URL,
+            f"{await _api_base()}/oauth/token",
             data={
                 "grant_type": "authorization_code",
                 "code": code,
@@ -59,7 +69,7 @@ async def refresh_access_token() -> str | None:
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            OURA_TOKEN_URL,
+            f"{await _api_base()}/oauth/token",
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
@@ -256,7 +266,7 @@ async def backfill():
 async def _sync_sleep(client, headers, start_date, end_date):
     records = await _fetch_paginated(
         client,
-        f"{OURA_API}/usercollection/sleep",
+        f"{await _api_base()}/v2/usercollection/sleep",
         headers,
         {"start_date": start_date, "end_date": end_date},
     )
@@ -423,7 +433,7 @@ async def _sync_heartrate(client, headers, start_datetime, end_datetime):
     # The heartrate endpoint ignores start_date/end_date; it only honors datetimes.
     records = await _fetch_paginated(
         client,
-        f"{OURA_API}/usercollection/heartrate",
+        f"{await _api_base()}/v2/usercollection/heartrate",
         headers,
         {"start_datetime": start_datetime, "end_datetime": end_datetime},
     )
@@ -452,7 +462,7 @@ async def _sync_heartrate(client, headers, start_datetime, end_datetime):
 async def _sync_daily_readiness(client, headers, start_date, end_date):
     records = await _fetch_paginated(
         client,
-        f"{OURA_API}/usercollection/daily_readiness",
+        f"{await _api_base()}/v2/usercollection/daily_readiness",
         headers,
         {"start_date": start_date, "end_date": end_date},
     )
@@ -494,7 +504,7 @@ async def _sync_daily_readiness(client, headers, start_date, end_date):
 async def _sync_daily_sleep(client, headers, start_date, end_date):
     records = await _fetch_paginated(
         client,
-        f"{OURA_API}/usercollection/daily_sleep",
+        f"{await _api_base()}/v2/usercollection/daily_sleep",
         headers,
         {"start_date": start_date, "end_date": end_date},
     )
@@ -575,7 +585,7 @@ async def _sync_workouts(client, headers, start_date, end_date):
     try:
         records = await _fetch_paginated(
             client,
-            f"{OURA_API}/usercollection/workout",
+            f"{await _api_base()}/v2/usercollection/workout",
             headers,
             {"start_date": start_date, "end_date": end_date},
         )
