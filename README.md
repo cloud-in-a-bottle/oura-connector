@@ -56,6 +56,13 @@ router, so only the zone owner (auto-recognized, no separate login) can reach th
 dashboard, the OAuth setup, or the data. The `health-data` service is consumed by
 other apps through the service mesh, not the public web.
 
+## Prebuilt image
+
+`cloudinabottle.toml` sets `prebuilt_image`, so Cloud in a Bottle pulls our
+signed prebuilt image (built by CI from each release tag) instead of building
+the Dockerfile. To fork and modify this app, comment out `prebuilt_image` so
+your instance builds from source.
+
 ## Links
 
 - Oura — https://ouraring.com/

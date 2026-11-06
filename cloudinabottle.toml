@@ -1,10 +1,13 @@
 [app]
 name = "oura"
-version = "0.1.0"
+version = "1.0.0"
 description = "Health data aggregator - syncs wearable data and exposes a generic health API"
 
 [runtime.container]
 image = "Dockerfile"
+# Cloud in a Bottle pulls this signed prebuilt image (built from the release tag's commit by CI) instead of building
+# `image`. If you fork this app and change it, comment this line out so your instance builds `image` instead.
+prebuilt_image = "registry.cloudinabottle.org/oura-connector"
 port = 8080
 
 [routing]
