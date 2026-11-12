@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1193,8 +1193,8 @@ wheels = [
 
 [[package]]
 name = "openhost"
-version = "0.3.0rc1"
-source = { git = "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle?rev=main#445237109b17a42a5d11e61b2b8b5554cb6ab9a1" }
+version = "0.3.1"
+source = { git = "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle?rev=main#22e2413418484107ec21d204f1a0d6bb6bbd14bf" }
 dependencies = [
     { name = "acme" },
     { name = "argon2-cffi" },

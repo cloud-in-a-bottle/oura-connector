@@ -25,7 +25,10 @@ def _base_url() -> str:
     app_name = os.environ.get("OPENHOST_APP_NAME", "health-data")
     zone = os.environ.get("OPENHOST_ZONE_DOMAIN", "")
     if zone:
-        return f"https://{app_name}.{zone}"
+        # Take the scheme from the router's public URL: https, unless the primary domain is plain HTTP.
+        router_url = os.environ.get("OPENHOST_ROUTER_PUBLIC_URL", "https://")
+        scheme = router_url.split("://", 1)[0]
+        return f"{scheme}://{app_name}.{zone}"
     return "http://localhost:8080"
 
 
