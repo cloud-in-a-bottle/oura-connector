@@ -116,9 +116,13 @@ async def oauth_callback(request: Request) -> Response:
     if not code:
         return Response(content="No code received", status_code=400, media_type="text/plain")
 
+    # The router lets any site send the owner here (a cross-site navigation), so the state from
+    # /setup/oauth is the only thing tying this code to a connect the owner started. No stored
+    # state means no connect is in progress.
     saved_state = await db.get_config("oauth_state")
-    if state != saved_state:
+    if not saved_state or not state or not secrets.compare_digest(state, saved_state):
         return Response(content="State mismatch", status_code=400, media_type="text/plain")
+    await db.delete_config("oauth_state")  # single use, even if the exchange below fails
 
     client_id = await db.get_config("oura_client_id")
     client_secret = await db.get_config("oura_client_secret")
@@ -128,7 +132,6 @@ async def oauth_callback(request: Request) -> Response:
     if "refresh_token" in tokens:
         await db.set_config("oura_refresh_token", tokens["refresh_token"])
 
-    await db.delete_config("oauth_state")
     await db.delete_config("workouts_unauthorized")
 
     asyncio.create_task(_background_sync())
