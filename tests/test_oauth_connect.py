@@ -4,7 +4,7 @@ Covers cloud-in-a-bottle/oura-connector#14, where Oura's redirect back to /oauth
 cross-site navigation that the router answered with an empty 404 instead of passing it to the app.
 """
 
-import sqlite3
+import subprocess
 import time
 from pathlib import Path
 
@@ -15,19 +15,44 @@ from playwright.sync_api import sync_playwright
 from mock_oura import ACCESS_TOKEN, CLIENT_ID, CLIENT_SECRET, MockOura
 
 
+REPO = Path(__file__).resolve().parent.parent
+OURA_MODULE = Path("openhost_oura/src/openhost_oura/oura.py")
+
+
 @pytest.fixture(scope="module")
-def stack():
-    # Its own stack: connecting leaves the app connected, which the shared stack's tests don't expect. Its
-    # own app name too: the harness names containers after the app, and tearing this stack down would
-    # otherwise remove the shared stack's container.
-    with OpenhostStack(app_dir=Path(__file__).resolve().parent.parent, app_name="oura-connect") as s:
-        yield s
-
-
-@pytest.fixture
 def mock_oura():
     with MockOura() as m:
         yield m
+
+
+def _app_pointed_at(mock: MockOura, dest: Path) -> Path:
+    """A copy of the app (git-listed files) with Oura's hosts swapped for the mock's."""
+    listed = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=REPO, capture_output=True, check=True,
+    ).stdout.decode().split("\0")
+    for rel in filter(None, listed):
+        if (REPO / rel).is_file():
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            (dest / rel).write_bytes((REPO / rel).read_bytes())
+    module = dest / OURA_MODULE
+    source = module.read_text()
+    # The browser visits the auth host; the app container calls the API host (tokens and data).
+    for real, fake in [("https://cloud.ouraring.com", mock.browser_url), ("https://api.ouraring.com", mock.container_url)]:
+        assert real in source, f"{real} no longer in {OURA_MODULE}; update this test"
+        source = source.replace(real, fake)
+    module.write_text(source)
+    return dest
+
+
+@pytest.fixture(scope="module")
+def stack(mock_oura, tmp_path_factory):
+    # Its own stack: connecting leaves the app connected, which the shared stack's tests don't expect. Its
+    # own app name too: the harness names containers after the app, and tearing this stack down would
+    # otherwise remove the shared stack's container.
+    app_dir = _app_pointed_at(mock_oura, tmp_path_factory.mktemp("app"))
+    with OpenhostStack(app_dir=app_dir, app_name="oura-connect") as s:
+        yield s
 
 
 @pytest.fixture
@@ -42,18 +67,8 @@ def browser_page():
             browser.close()
 
 
-def _point_app_at(stack: OpenhostStack, mock: MockOura) -> None:
-    db_path = Path(stack.local_stack.config.persistent_data_dir) / "app_data" / stack.app_name / "sqlite" / "health.db"
-    with sqlite3.connect(db_path) as conn:
-        conn.executemany(
-            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-            [("oura_auth_base_override", mock.browser_url), ("oura_api_base_override", mock.container_url)],
-        )
-
-
 def test_connect_to_oura(stack, mock_oura, browser_page):
     page = browser_page
-    _point_app_at(stack, mock_oura)
     callback = f"{stack.url}/oauth/callback"
 
     stack.playwright_login(page)

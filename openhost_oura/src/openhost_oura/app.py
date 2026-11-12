@@ -25,8 +25,7 @@ def _base_url() -> str:
     app_name = os.environ.get("OPENHOST_APP_NAME", "health-data")
     zone = os.environ.get("OPENHOST_ZONE_DOMAIN", "")
     if zone:
-        # The router's public URL has the primary domain's scheme: https, except on a plain-HTTP
-        # primary such as the test harness's http://<zone>.localhost:<port>.
+        # Take the scheme from the router's public URL: https, unless the primary domain is plain HTTP.
         router_url = os.environ.get("OPENHOST_ROUTER_PUBLIC_URL", "https://")
         scheme = router_url.split("://", 1)[0]
         return f"{scheme}://{app_name}.{zone}"
@@ -105,7 +104,7 @@ async def start_oauth(request: Request) -> Response:
     state = secrets.token_urlsafe(16)
     await db.set_config("oauth_state", state)
 
-    url = await oura.get_authorize_url(client_id, _redirect_uri(), state)
+    url = oura.get_authorize_url(client_id, _redirect_uri(), state)
     return Redirect(url)
 
 
