@@ -1,6 +1,7 @@
 [app]
 name = "oura"
-version = "1.0.0"
+version = "1.0.1"
+release_tag_format = "semver"
 description = "Health data aggregator - syncs wearable data and exposes a generic health API"
 
 [runtime.container]
